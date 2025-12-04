@@ -1,0 +1,702 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Texas Hold'em Demo — Single File</title>
+<style>
+  :root{
+    --card-w: 71px; /* computed from 923/13 ≈ 71 */
+    --card-h: 96px; /* computed from 576/6 = 96 */
+  }
+  body{
+    margin:0;
+    font-family: system-ui, Arial;
+    background:#0a5f0a;
+    color:#fff;
+    overflow:hidden;
+  }
+
+  .table {
+    width:100%;
+    height:100vh;
+    position:relative;
+    box-sizing:border-box;
+    padding:20px;
+  }
+
+  /* deck area top-right */
+  .deck {
+    position:absolute;
+    right:30px;
+    top:30px;
+    width:var(--card-w);
+    height:var(--card-h);
+    perspective:800px;
+  }
+
+  .deck .card {
+    width:var(--card-w);
+    height:var(--card-h);
+    background-image: url("sprite.png");
+    background-size: 923px 576px;
+    border-radius:6px;
+    box-shadow:0 6px 12px rgba(0,0,0,.5);
+  }
+
+  /* players */
+  .players {
+    position:absolute;
+    left:50%;
+    transform:translateX(-50%);
+    bottom:30px;
+    display:flex;
+    gap:30px;
+    align-items:flex-end;
+  }
+
+  .player {
+    width:160px;
+    text-align:center;
+  }
+
+  .player .name { margin-bottom:8px; font-weight:700; color:#fff; text-shadow:0 1px 0 #000; }
+  .hand { height:110px; display:flex; gap:8px; justify-content:center; align-items:flex-end; }
+
+  /* community cards center */
+  .community {
+    position:absolute;
+    left:50%;
+    top:45%;
+    transform:translate(-50%,-50%);
+    display:flex;
+    gap:12px;
+    align-items:center;
+    justify-content:center;
+    height:120px;
+  }
+
+  /* absolute animated card used for dealing */
+  .anim-card {
+    position:absolute;
+    width:var(--card-w);
+    height:var(--card-h);
+    background-image: url("sprite.png");
+    background-size: 923px 576px;
+    border-radius:6px;
+    transition: transform 600ms cubic-bezier(.2,.8,.2,1), left 600ms cubic-bezier(.2,.8,.2,1), top 600ms cubic-bezier(.2,.8,.2,1);
+    transform-origin:center center;
+    z-index:200;
+    box-shadow:0 8px 18px rgba(0,0,0,.45);
+    backface-visibility:hidden;
+  }
+
+  /* flip container (3D) */
+  .flip {
+    width:var(--card-w);
+    height:var(--card-h);
+    perspective:800px;
+    display:inline-block;
+  }
+
+  .flip-inner{
+    width:100%;
+    height:100%;
+    position:relative;
+    transform-style:preserve-3d;
+    transition: transform 400ms ease-in-out;
+  }
+
+  .flip-front, .flip-back{
+    position:absolute;
+    width:100%;
+    height:100%;
+    left:0; top:0;
+    backface-visibility:hidden;
+    border-radius:6px;
+  }
+
+  .flip-front { transform: rotateY(0deg); }
+  .flip-back { transform: rotateY(180deg); }
+
+  .flipped .flip-inner { transform: rotateY(180deg); }
+
+  /* hidden (back) card from sprite: row 5 (index 4), col 0 */
+  .back-sprite { background-position: 0px -384px; } /* 4 * 96 = 384 */
+
+  /* text area */
+  .controls {
+    position:absolute;
+    left:30px;
+    top:30px;
+    color:#fff;
+  }
+
+  button {
+    font-size:16px;
+    padding:8px 12px;
+    margin-right:8px;
+    cursor:pointer;
+    border-radius:6px;
+    border:0;
+  }
+
+  .result {
+    margin-top:8px;
+    font-weight:700;
+    text-shadow:0 1px 0 #000;
+  }
+
+  .winner { color: #ffdf5d; font-size:18px; }
+  .small { font-size:13px; color:#e8e8e8; }
+
+  /* responsive clamp */
+  @media (max-width:900px){
+    .players { gap:12px; bottom:10px; }
+    .player { width:110px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="table" id="table">
+
+  <div class="controls">
+    <button id="startBtn">Start Round</button>
+    <button id="resetBtn">Reset</button>
+    <div class="result" id="status">Ready.</div>
+  </div>
+
+  <div class="deck" id="deckArea" title="Deck">
+    <!-- show back of card in deck -->
+    <div class="card back-sprite" style="width:var(--card-w);height:var(--card-h)"></div>
+  </div>
+
+  <div class="community" id="community"></div>
+
+  <div class="players" id="players">
+    <!-- 4 players placed automatically -->
+  </div>
+
+</div>
+
+<script>
+/* ------------------ Configuration (sprite sizes) ------------------ */
+const SPRITE_W = 923;
+const SPRITE_H = 576;
+const COLS = 13;
+const ROWS = 6;
+const CARD_W = SPRITE_W / COLS; // ~71
+const CARD_H = SPRITE_H / ROWS; // 96
+
+/* ------------------ Utility DOM helpers ------------------ */
+function $(sel){ return document.querySelector(sel); }
+function byId(id){ return document.getElementById(id); }
+
+/* ------------------ Build UI: 4 players ------------------ */
+const playersContainer = byId('players');
+const NUM_PLAYERS = 4;
+const players = []; // will hold {id, name, cards:[], elem}
+
+for(let i=0;i<NUM_PLAYERS;i++){
+  const pDiv = document.createElement('div');
+  pDiv.className = 'player';
+  pDiv.innerHTML = `<div class="name">Player ${i+1}</div>
+                    <div class="hand" id="hand-${i}"></div>
+                    <div class="small" id="handinfo-${i}"></div>`;
+  playersContainer.appendChild(pDiv);
+  players.push({ id:i, name:`Player ${i+1}`, cards:[], elem:pDiv, handElem: pDiv.querySelector('.hand'), infoElem:pDiv.querySelector('.small') });
+}
+
+/* ------------------ Deck creation ------------------ */
+/* Row mapping as per your sprite: 0:clubs,1:diamonds,2:hearts,3:spades,4:back,5:unused */
+let deck = [];
+
+function createDeck(){
+  deck = [];
+  const suits = ['clubs','diamonds','hearts','spades'];
+  for(let row=0; row<4; row++){
+    for(let col=0; col<13; col++){
+      deck.push({ row, col, suit: suits[row], rank: col }); // rank 0..12 (Ace..King if you like)
+    }
+  }
+}
+
+function shuffleDeck(){
+  for(let i=deck.length-1;i>0;i--){
+    const r = Math.floor(Math.random()*(i+1));
+    [deck[i], deck[r]] = [deck[r], deck[i]];
+  }
+}
+
+/* pop one card from deck */
+function drawCard(){
+  return deck.shift();
+}
+
+/* ------------------ Create visual flip card (back/front) ------------------ */
+function makeFlipElement(cardObj, faceUp=false){
+  // flip wrapper
+  const wrap = document.createElement('div');
+  wrap.className = 'flip';
+  const inner = document.createElement('div');
+  inner.className = 'flip-inner';
+  const front = document.createElement('div');
+  front.className = 'flip-back';
+  const back = document.createElement('div');
+  back.className = 'flip-front';
+
+  // back uses back-sprite (row 4 col 0)
+  back.style.backgroundImage = 'url(sprite.png)';
+  back.style.backgroundSize = `${SPRITE_W}px ${SPRITE_H}px`;
+  back.style.width = `var(--card-w)`;
+  back.style.height = `var(--card-h)`;
+  back.classList.add('back-sprite');
+
+  // front shows actual card slice
+  front.style.backgroundImage = 'url(sprite.png)';
+  front.style.backgroundSize = `${SPRITE_W}px ${SPRITE_H}px`;
+  front.style.width = `var(--card-w)`;
+  front.style.height = `var(--card-h)`;
+
+  if(cardObj){
+    const x = -(cardObj.col * CARD_W);
+    const y = -(cardObj.row * CARD_H);
+    front.style.backgroundPosition = `${x}px ${y}px`;
+  } else {
+    // empty placeholder
+    front.style.backgroundColor = '#2b6e2b';
+  }
+
+  inner.appendChild(front);
+  inner.appendChild(back);
+  wrap.appendChild(inner);
+
+  if(faceUp){
+    wrap.classList.add('flipped');
+  }
+  return wrap;
+}
+
+/* ------------------ Animation helper: animate a floating card from deck to target */ 
+function animateDeal(cardObj, startRect, targetRect, faceUp=false, onDone=null){
+  // create absolute anim card with back sprite initially
+  const anim = document.createElement('div');
+  anim.className = 'anim-card';
+  anim.style.left = `${startRect.left}px`;
+  anim.style.top = `${startRect.top}px`;
+  anim.style.width = `${startRect.width}px`;
+  anim.style.height = `${startRect.height}px`;
+
+  // set initial image as back
+  const backY = -(4 * CARD_H);
+  anim.style.backgroundPosition = `0px ${backY}px`;
+  anim.style.backgroundSize = `${SPRITE_W}px ${SPRITE_H}px`;
+
+  document.body.appendChild(anim);
+
+  // trigger move in next frame
+  requestAnimationFrame(()=>{
+    anim.style.left = `${targetRect.left}px`;
+    anim.style.top = `${targetRect.top}px`;
+    anim.style.transform = `translateZ(0)`;
+  });
+
+  // after transition, replace with flip element in target container
+  anim.addEventListener('transitionend', function handler(){
+    anim.removeEventListener('transitionend', handler);
+    // create flip element, initially faceDown or faceUp depending
+    const flip = makeFlipElement(cardObj, faceUp);
+    // place inside a small container at target
+    if(onDone) onDone(flip);
+    anim.remove();
+  });
+}
+
+/* ------------------ Get deck DOM position for animation origin ------------------ */
+function getDeckRect(){
+  const deckArea = byId('deckArea');
+  const r = deckArea.getBoundingClientRect();
+  // center-top a little
+  return { left: r.left, top: r.top, width: r.width, height: r.height };
+}
+
+/* ------------------ Deal Sequence (2 cards each) + community (3+1+1) ------------------ */
+const communityElem = byId('community');
+let communityCards = []; // 5 cards slots
+
+function clearTable(){
+  // clear hands and community
+  players.forEach(p=>{
+    p.cards = [];
+    p.handElem.innerHTML = '';
+    p.infoElem.textContent = '';
+  });
+  communityElem.innerHTML = '';
+  communityCards = [];
+  byId('status').textContent = 'Ready.';
+}
+
+/* place placeholders for community slots (5) */
+function prepareCommunitySlots(){
+  communityElem.innerHTML = '';
+  for(let i=0;i<5;i++){
+    const slot = document.createElement('div');
+    slot.style.width = 'var(--card-w)';
+    slot.style.height = 'var(--card-h)';
+    slot.style.borderRadius = '6px';
+    slot.style.boxShadow = '0 6px 12px rgba(0,0,0,.35)';
+    slot.style.background = 'linear-gradient(#1d7b1d,#146114)';
+    communityElem.appendChild(slot);
+    communityCards.push({ slot, card:null });
+  }
+}
+
+/* compute position rect for player's nth card slot (0 or 1) */
+function getPlayerSlotRect(playerIndex, cardIndex){
+  const hand = byId(`hand-${playerIndex}`);
+  // if no children yet, approximate based on hand position
+  const rect = hand.getBoundingClientRect();
+  // compute left offset inside hand for cardIndex
+  const childLeft = rect.left + 8 + (cardIndex * (CARD_W + 8));
+  const top = rect.top + (rect.height - CARD_H);
+  return { left: childLeft, top: top, width: CARD_W, height: CARD_H };
+}
+
+function getCommunitySlotRect(slotIndex){
+  const slot = communityCards[slotIndex].slot;
+  const rect = slot.getBoundingClientRect();
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+/* full round flow */
+async function startRound(){
+  clearTable();
+  createDeck();
+  shuffleDeck();
+  prepareCommunitySlots();
+
+  byId('status').textContent = 'Shuffled. Dealing...';
+
+  // initial deck rect
+  const deckRect = getDeckRect();
+
+  // deal 2 rounds (one card to each player per round)
+  for(let round=0; round<2; round++){
+    for(let p=0;p<NUM_PLAYERS;p++){
+      const card = drawCard();
+      players[p].cards.push(card);
+
+      // compute where to place
+      // target is inside player's hand element; we will use animateDeal and pass onDone to append flip element
+      const targetRect = getPlayerSlotRect(p, round);
+
+      // faceUp only for player 0 (human)
+      const faceUp = (p === 0);
+
+      // wait for animation completion using Promise
+      await new Promise(resolve=>{
+        animateDeal(card, deckRect, targetRect, faceUp, (flipElem)=>{
+          // append flip element inside player's hand
+          const wrap = document.createElement('div');
+          wrap.style.width = 'var(--card-w)';
+          wrap.style.height = 'var(--card-h)';
+          wrap.style.display = 'inline-block';
+          wrap.style.position = 'relative';
+          wrap.appendChild(flipElem);
+          // if faceUp: ensure flipped state
+          if(faceUp) flipElem.classList.add('flipped');
+          players[p].handElem.appendChild(wrap);
+        //   console.log(players[p]);
+          
+          resolve();
+        });
+      });
+      await wait(120); // small gap for nicer animation
+    }
+  }
+
+  byId('status').textContent = 'Dealt hole cards. Dealing flop...';
+
+  // Burn one card (simulate) and deal flop (3 community)
+  await wait(300);
+  drawCard(); // burn
+
+  for(let i=0;i<3;i++){
+    const card = drawCard();
+    communityCards[i].card = card;
+    const targetRect = getCommunitySlotRect(i);
+    await new Promise(resolve=>{
+      animateDeal(card, deckRect, targetRect, true, (flipElem)=>{
+        // append flip element but keep faceDown (no flipped class)
+        communityCards[i].slot.innerHTML = '';
+        communityCards[i].slot.appendChild(flipElem);
+        resolve();
+      });
+    });
+    await wait(180);
+  }
+
+  byId('status').textContent = 'Flop done. Dealing turn...';
+
+  await wait(600);
+  drawCard(); // burn
+  // deal turn (slot 3)
+  {
+    const card = drawCard();
+    communityCards[3].card = card;
+    const targetRect = getCommunitySlotRect(3);
+    await new Promise(resolve=>{
+      animateDeal(card, deckRect, targetRect, true, (flipElem)=>{
+        communityCards[3].slot.innerHTML = '';
+        communityCards[3].slot.appendChild(flipElem);
+        resolve();
+      });
+    });
+  }
+
+  byId('status').textContent = 'Turn done. Dealing river...';
+  await wait(800);
+  drawCard(); // burn
+  {
+    const card = drawCard();
+    communityCards[4].card = card;
+    const targetRect = getCommunitySlotRect(4);
+    await new Promise(resolve=>{
+      animateDeal(card, deckRect, targetRect, true, (flipElem)=>{
+        communityCards[4].slot.innerHTML = '';
+        communityCards[4].slot.appendChild(flipElem);
+        resolve();
+      });
+    });
+  }
+
+  byId('status').textContent = 'All cards dealt. Revealing...';
+
+  // flip community cards after small delay
+  await wait(900);
+  for(let i=0;i<5;i++){
+    const slot = communityCards[i].slot;
+    const flipElem = slot.querySelector('.flip');
+    if(flipElem){
+      // after small stagger, flip to reveal
+      await wait(180);
+      // set front background position using card info
+      const card = communityCards[i].card;
+      const front = flipElem.querySelector('.flip-front');
+      const x = -(card.col * CARD_W);
+      const y = -(card.row * CARD_H);
+      front.style.backgroundPosition = `${x}px ${y}px`;
+      // flip class toggled
+      flipElem.classList.add('flipped');
+    }
+  }
+
+  // reveal other players hole cards (except player 1 already shown)
+  await wait(800);
+  for(let p=1;p<NUM_PLAYERS;p++){
+    // their two cards in hand: find flip elems and set front positions then flip
+    const handNode = players[p].handElem;
+    const flips = handNode.querySelectorAll('.flip');
+    for(let ci=0; ci<flips.length; ci++){
+      const flipEl = flips[ci];
+      const card = players[p].cards[ci];
+      const front = flipEl.querySelector('.flip-front');
+      const x = -(card.col * CARD_W);
+      const y = -(card.row * CARD_H);
+      front.style.backgroundPosition = `${x}px ${y}px`;
+      flipEl.classList.add('flipped');
+    }
+    await wait(250);
+  }
+
+  byId('status').textContent = 'Evaluating hands...';
+  await wait(300);
+
+  // Evaluate each player's best hand and decide winner(s)
+  const communityCardsList = communityCards.map(c=>c.card);
+  const results = players.map(p=>{
+    const all = p.cards.concat(communityCardsList);
+    const evalRes = evaluateBestHand(all);
+    p.handRank = evalRes;
+    return { player:p, rank:evalRes };
+  });
+
+  // find best rank (higher value better)
+  results.sort((a,b)=> compareHandEval(b.rank, a.rank));
+  const best = results[0].rank;
+  const winners = results.filter(r=> compareHandEval(r.rank, best)===0 ).map(r=>r.player);
+
+  // display results
+  players.forEach(p=>{
+    const name = p.name;
+    const label = handLabel(p.handRank);
+    p.infoElem.textContent = label;
+    p.infoElem.style.color = winners.includes(p) ? '#ffdf5d' : '#e8e8e8';
+  });
+
+  if(winners.length===1){
+    byId('status').innerHTML = `Winner: <span class="winner">${winners[0].name}</span> — ${handLabel(winners[0].handRank)}`;
+  } else {
+    byId('status').innerHTML = `TIE: ${winners.map(w=>w.name).join(', ')} — ${handLabel(winners[0].handRank)}`;
+  }
+}
+
+/* ------------------ Small helpers: wait ------------------ */
+function wait(ms){ return new Promise(res=>setTimeout(res, ms)); }
+
+/* ------------------ Hand evaluator (moderate complexity) ------------------ */
+/* Convert card rank from 0..12 -> value: Ace treated high and low for straights */
+function cardValue(card){ // map 0..12 to 14,2..13 if 0 is Ace
+  // assuming sprite col 0 is Ace — previous code used col as rank with Ace at 0
+  // to be safe we treat col 0 as Ace (value 14)
+  const col = card.col;
+  if(col===0) return 14;
+  return col+1; // 1->2, 12->13(K)
+}
+
+/* Get all 5-card combinations from array of 7 cards */
+function combinations(arr, k){
+  const results = [];
+  const n = arr.length;
+  function helper(start, combo){
+    if(combo.length===k){ results.push(combo.slice()); return; }
+    for(let i=start;i<n;i++){
+      combo.push(arr[i]);
+      helper(i+1, combo);
+      combo.pop();
+    }
+  }
+  helper(0, []);
+  return results;
+}
+
+/* Evaluate single 5-card hand: returns an object that can be compared */
+function eval5(cards){
+  // cards: array length 5 with {row,col,suit,rank}
+  // produce rank category and tie-breaker array
+  const vals = cards.map(c=>cardValue(c)).sort((a,b)=>b-a); // desc
+  // count occurrences
+  const counts = {};
+  cards.forEach(c=>{ const v=cardValue(c); counts[v] = (counts[v]||0)+1; });
+  const countPairs = Object.entries(counts).map(([v,c])=>({v:parseInt(v),c})).sort((a,b)=>{
+    if(b.c!==a.c) return b.c-a.c; // higher count first
+    return b.v - a.v; // then value desc
+  });
+
+  const isFlush = (()=> { const s = cards[0].suit; return cards.every(c=>c.suit===s); })();
+
+  // straight detection (Ace low)
+  let uniq = Array.from(new Set(vals)).sort((a,b)=>b-a);
+  let isStraight = false;
+  let topStraight = null;
+  // check normal straights
+  for(let i=0;i<=uniq.length-5;i++){
+    const seq = uniq.slice(i,i+5);
+    let ok = true;
+    for(let j=0;j<4;j++) if(seq[j] - 1 !== seq[j+1]) ok = false;
+    if(ok){ isStraight = true; topStraight = seq[0]; break; }
+  }
+  // special wheel A-2-3-4-5
+  if(!isStraight){
+    const has = v=>uniq.includes(v);
+    if(has(14) && has(5) && has(4) && has(3) && has(2)){
+      isStraight = true; topStraight = 5;
+    }
+  }
+
+  // determine hand category and tie-breaker
+  // categories: 8: straight flush,7:4kind,6:fullhouse,5:flush,4:straight,3:3kind,2:two pair,1:one pair,0:high card
+  if(isStraight && isFlush){
+    return { cat:8, tiebreak: [topStraight] };
+  }
+  if(countPairs[0].c===4){
+    return { cat:7, tiebreak: [countPairs[0].v, countPairs[1].v] };
+  }
+  if(countPairs[0].c===3 && countPairs[1] && countPairs[1].c===2){
+    return { cat:6, tiebreak: [countPairs[0].v, countPairs[1].v] };
+  }
+  if(isFlush){
+    return { cat:5, tiebreak: vals };
+  }
+  if(isStraight){
+    return { cat:4, tiebreak: [topStraight] };
+  }
+  if(countPairs[0].c===3){
+    // trips
+    const kickers = vals.filter(v=>v!==countPairs[0].v);
+    return { cat:3, tiebreak: [countPairs[0].v, ...kickers] };
+  }
+  if(countPairs[0].c===2 && countPairs[1] && countPairs[1].c===2){
+    // two pair
+    const pairVals = [countPairs[0].v, countPairs[1].v];
+    const kicker = vals.filter(v=>!pairVals.includes(v))[0];
+    return { cat:2, tiebreak: [...pairVals, kicker] };
+  }
+  if(countPairs[0].c===2){
+    // one pair
+    const pairVal = countPairs[0].v;
+    const kickers = vals.filter(v=>v!==pairVal);
+    return { cat:1, tiebreak: [pairVal, ...kickers] };
+  }
+  // high card
+  return { cat:0, tiebreak: vals };
+}
+
+/* evaluate best 5-card out of 7 */
+function evaluateBestHand(cards7){
+  const combs = combinations(cards7, 5);
+  let bestEval = null;
+  for(const c of combs){
+    const e = eval5(c);
+    if(!bestEval) bestEval = e;
+    else {
+      const cmp = compareHandEval(e, bestEval);
+      if(cmp>0) bestEval = e;
+    }
+  }
+  return bestEval;
+}
+
+/* compare two eval result objects: return 1 if a>b, -1 if a<b, 0 equal */
+function compareHandEval(a,b){
+  if(a.cat !== b.cat) return a.cat - b.cat;
+  // compare tiebreak arrays lexicographically
+  for(let i=0;i<Math.max(a.tiebreak.length, b.tiebreak.length); i++){
+    const av = a.tiebreak[i]||0, bv = b.tiebreak[i]||0;
+    if(av !== bv) return av - bv;
+  }
+  return 0;
+}
+
+/* human readable label */
+function handLabel(evalObj){
+  const names = ['High Card','One Pair','Two Pair','Three of a Kind','Straight','Flush','Full House','Four of a Kind','Straight Flush'];
+  return names[evalObj.cat] + ' (' + evalObj.tiebreak.join(',') + ')';
+}
+
+/* ------------------ Button wiring ------------------ */
+byId('startBtn').addEventListener('click', async ()=>{
+  byId('startBtn').disabled = true;
+  byId('resetBtn').disabled = true;
+  try{
+    await startRound();
+  }catch(err){
+    console.error(err);
+    byId('status').textContent = 'Error: '+err.message;
+  }
+  byId('startBtn').disabled = false;
+  byId('resetBtn').disabled = false;
+});
+
+byId('resetBtn').addEventListener('click', ()=>{
+  clearTable();
+  prepareCommunitySlots();
+});
+
+/* on load prepare */
+clearTable();
+prepareCommunitySlots();
+
+</script>
+</body>
+</html>

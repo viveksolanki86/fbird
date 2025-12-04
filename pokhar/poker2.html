@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Poker Game</title>
+
+<style>
+    body {
+        background: #0f5f0f;
+        font-family: Arial;
+        text-align: center;
+        color: white;
+        overflow-x: hidden;
+    }
+
+    #table {
+        margin-top: 30px;
+    }
+
+    .player {
+        margin: 20px;
+        font-size: 22px;
+        position: relative; /* IMPORTANT FIX */
+        min-height: 110px;
+    }
+
+    .card {
+        width: 71px;
+        height: 96px;
+        background-image: url("sprite.png");
+        background-size: 923px 576px;
+        display: inline-block;
+        margin: 5px;
+        border-radius: 8px;
+        transition: all 0.5s ease;
+    }
+
+    .back {
+        background-position: 0px -384px; 
+    }
+
+    #deck {
+        width: 71px;
+        height: 96px;
+        background-image: url("sprite.png");
+        background-size: 923px 576px;
+        background-position: 0px -384px;
+        margin: 20px auto;
+        border-radius: 8px;
+        position: relative;
+    }
+
+    #startBtn {
+        padding: 12px 25px;
+        font-size: 20px;
+        cursor: pointer;
+    }
+
+    @keyframes shuffleAnim {
+        0% { transform: rotate(0deg); }
+        25% { transform: rotate(5deg); }
+        50% { transform: rotate(-5deg); }
+        75% { transform: rotate(5deg); }
+        100% { transform: rotate(0deg); }
+    }
+
+    .shuffle {
+        animation: shuffleAnim 0.2s infinite;
+    }
+</style>
+</head>
+
+<body>
+
+<h1>POKER – FIXED VERSION</h1>
+
+<div id="deck"></div>
+
+<button id="startBtn" onclick="startRound()">Start Round</button>
+
+<div id="table">
+    <div id="player1" class="player">Player 1:</div>
+    <div id="player2" class="player">Player 2:</div>
+    <div id="player3" class="player">Player 3:</div>
+    <div id="player4" class="player">Player 4:</div>
+</div>
+
+<script>
+const cardWidth = 923 / 13;
+const cardHeight = 576 / 6;
+
+let deck = [];
+
+function createDeck() {
+    deck = [];
+    for (let row = 0; row < 4; row++) {
+        for (let col = 0; col < 13; col++) {
+            deck.push({ row, col });
+        }
+    }
+}
+
+function shuffleDeck() {
+    for (let i = deck.length - 1; i > 0; i++) {
+        let r = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[r]] = [deck[r], deck[i]];
+    }
+}
+
+function createCard(card, faceUp) {
+    const div = document.createElement("div");
+    div.classList.add("card");
+
+    if (!faceUp) {
+        div.classList.add("back");
+        return div;
+    }
+
+    const posX = -(card.col * cardWidth);
+    const posY = -(card.row * cardHeight);
+
+    div.style.backgroundPosition = `${posX}px ${posY}px`;
+    return div;
+}
+
+function clearPlayers() {
+    for (let i = 1; i <= 4; i++) {
+        document.getElementById("player" + i).innerHTML = `Player ${i}: `;
+    }
+}
+
+// FIXED → animated card remove timing + target positions
+async function dealCard(playerId, faceUp, delay) {
+    return new Promise(resolve => {
+        setTimeout(() => {
+            const realCard = deck.shift();
+            const temp = createCard(realCard, faceUp);
+
+            // temporary flying card
+            temp.style.position = "absolute";
+            temp.style.left = "50%";
+            temp.style.top = "180px";
+            temp.style.transform = "translateX(-50%) scale(0.1)";
+            temp.style.zIndex = 999;
+
+            document.body.appendChild(temp);
+
+            // target position
+            const target = document.getElementById(playerId);
+            const rect = target.getBoundingClientRect();
+
+            setTimeout(() => {
+                temp.style.left = rect.left + 120 + "px";
+                temp.style.top = rect.top + "px";
+                temp.style.transform = "scale(1)";
+
+                setTimeout(() => {
+                    document.body.removeChild(temp); // SAFE remove
+                    target.appendChild(createCard(realCard, faceUp)); // place real card
+                    resolve();
+                }, 300);
+
+            }, 20);
+
+        }, delay);
+    });
+}
+
+async function startRound() {
+    clearPlayers();
+    createDeck();
+
+    const d = document.getElementById("deck");
+    d.classList.add("shuffle");
+
+    setTimeout(() => {
+        shuffleDeck();
+        d.classList.remove("shuffle");
+    }, 1000);
+
+    await new Promise(r => setTimeout(r, 1000));
+
+    let delay = 0;
+
+    for (let r = 0; r < 2; r++) {
+        await dealCard("player1", true, delay);
+        delay += 300;
+
+        await dealCard("player2", false, delay);
+        delay += 300;
+
+        await dealCard("player3", false, delay);
+        delay += 300;
+
+        await dealCard("player4", false, delay);
+        delay += 300;
+    }
+}
+</script>
+
+</body>
+</html>

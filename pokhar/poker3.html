@@ -1,0 +1,248 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Texas Hold'em Demo — Smooth Dealing</title>
+<style>
+:root{
+  --card-w: 71px;
+  --card-h: 96px;
+}
+body{
+  margin:0;
+  font-family: system-ui, Arial;
+  background:#0a5f0a;
+  color:#fff;
+  overflow:hidden;
+}
+.table { width:100%; height:100vh; position:relative; padding:20px; box-sizing:border-box; }
+.deck { position:absolute; right:30px; top:30px; width:var(--card-w); height:var(--card-h); perspective:800px; }
+.deck .card { width:var(--card-w); height:var(--card-h); background-image:url("sprite.png"); background-size: 923px 576px; border-radius:6px; box-shadow:0 6px 12px rgba(0,0,0,.5); }
+.players { position:absolute; left:50%; transform:translateX(-50%); bottom:30px; display:flex; gap:30px; align-items:flex-end; }
+.player { width:160px; text-align:center; }
+.player .name { margin-bottom:8px; font-weight:700; color:#fff; text-shadow:0 1px 0 #000; }
+.hand { height:110px; display:flex; gap:8px; justify-content:center; align-items:flex-end; position:relative; }
+.community { position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); display:flex; gap:12px; align-items:center; justify-content:center; height:120px; }
+.anim-card { position:absolute; width:var(--card-w); height:var(--card-h); background-image: url("sprite.png"); background-size: 923px 576px; border-radius:6px; transition: transform 600ms cubic-bezier(.2,.8,.2,1), left 600ms cubic-bezier(.2,.8,.2,1), top 600ms cubic-bezier(.2,.8,.2,1); transform-origin:center center; z-index:200; box-shadow:0 8px 18px rgba(0,0,0,.45); backface-visibility:hidden; }
+.flip { width:var(--card-w); height:var(--card-h); perspective:800px; display:inline-block; }
+.flip-inner{ width:100%; height:100%; position:relative; transform-style:preserve-3d; transition: transform 400ms ease-in-out; }
+.flip-front, .flip-back{ position:absolute; width:100%; height:100%; left:0; top:0; backface-visibility:hidden; border-radius:6px; }
+.flip-front { transform: rotateY(0deg); }
+.flip-back { transform: rotateY(180deg); }
+.flipped .flip-inner { transform: rotateY(180deg); }
+.back-sprite { background-position: 0px -384px; } 
+.controls { position:absolute; left:30px; top:30px; color:#fff; }
+button { font-size:16px; padding:8px 12px; margin-right:8px; cursor:pointer; border-radius:6px; border:0; }
+.result { margin-top:8px; font-weight:700; text-shadow:0 1px 0 #000; }
+.winner { color: #ffdf5d; font-size:18px; }
+.small { font-size:13px; color:#e8e8e8; }
+@media (max-width:900px){ .players { gap:12px; bottom:10px; } .player { width:110px; } }
+</style>
+</head>
+<body>
+
+<div class="table" id="table">
+  <div class="controls">
+    <button id="startBtn">Start Round</button>
+    <button id="resetBtn">Reset</button>
+    <div class="result" id="status">Ready.</div>
+  </div>
+  <div class="deck" id="deckArea" title="Deck">
+    <div class="card back-sprite" style="width:var(--card-w);height:var(--card-h)"></div>
+  </div>
+  <div class="community" id="community"></div>
+  <div class="players" id="players"></div>
+</div>
+
+<script>
+const SPRITE_W=923, SPRITE_H=576, COLS=13, ROWS=6, CARD_W=SPRITE_W/COLS, CARD_H=SPRITE_H/ROWS;
+const USER_PLAYER=0; // user index
+
+function byId(id){return document.getElementById(id);}
+const NUM_PLAYERS=4;
+const playersContainer = byId('players');
+const players=[];
+
+// Build players UI
+for(let i=0;i<NUM_PLAYERS;i++){
+  const pDiv=document.createElement('div');
+  pDiv.className='player';
+  pDiv.innerHTML=`<div class="name">Player ${i+1}</div>
+                  <div class="hand" id="hand-${i}"></div>
+                  <div class="small" id="handinfo-${i}"></div>`;
+  playersContainer.appendChild(pDiv);
+  players.push({ id:i, name:`Player ${i+1}`, cards:[], elem:pDiv, handElem:pDiv.querySelector('.hand'), infoElem:pDiv.querySelector('.small')});
+}
+
+// Deck functions
+let deck=[];
+function createDeck(){
+  deck=[];
+  const suits=['clubs','diamonds','hearts','spades'];
+  for(let row=0; row<4; row++){
+    for(let col=0; col<13; col++){
+      deck.push({row,col,suit:suits[row],rank:col});
+    }
+  }
+}
+
+function shuffleDeck(){
+  for(let i=deck.length-1;i>0;i--){
+    const r=Math.floor(Math.random()*(i+1));
+    [deck[i],deck[r]]=[deck[r],deck[i]];
+  }
+}
+
+function drawCard(){ return deck.shift(); }
+
+// Create flip card element
+function makeFlipElement(cardObj, faceUp=false){
+  const wrap=document.createElement('div'); wrap.className='flip';
+  const inner=document.createElement('div'); inner.className='flip-inner';
+  const front=document.createElement('div'); front.className='flip-front';
+  const back=document.createElement('div'); back.className='flip-back';
+  back.style.backgroundImage='url(sprite.png)';
+  back.style.backgroundSize=`${SPRITE_W}px ${SPRITE_H}px`;
+  back.classList.add('back-sprite');
+  front.style.backgroundImage='url(sprite.png)';
+  front.style.backgroundSize=`${SPRITE_W}px ${SPRITE_H}px`;
+  if(cardObj){ front.style.backgroundPosition=`${-cardObj.col*CARD_W}px ${-cardObj.row*CARD_H}px`; } 
+  else{ front.style.backgroundColor='#2b6e2b'; }
+  inner.appendChild(front); inner.appendChild(back); wrap.appendChild(inner);
+  if(faceUp) wrap.classList.add('flipped');
+  return wrap;
+}
+
+// Animate card from deck to target
+function animateDeal(cardObj, startRect, targetRect, faceUp=false, onDone=null){
+  const anim=document.createElement('div'); anim.className='anim-card';
+  anim.style.left=startRect.left+'px'; anim.style.top=startRect.top+'px';
+  anim.style.width=startRect.width+'px'; anim.style.height=startRect.height+'px';
+  anim.style.backgroundPosition=`0px ${-4*CARD_H}px`;
+  anim.style.backgroundSize=`${SPRITE_W}px ${SPRITE_H}px`;
+  document.body.appendChild(anim);
+  requestAnimationFrame(()=>{ anim.style.left=targetRect.left+'px'; anim.style.top=targetRect.top+'px'; anim.style.transform='translateZ(0)'; });
+  anim.addEventListener('transitionend', function handler(){
+    anim.removeEventListener('transitionend', handler);
+    const flip = makeFlipElement(cardObj, faceUp);
+    if(onDone) onDone(flip);
+    anim.remove();
+  });
+}
+
+// Get positions
+function getDeckRect(){ const r=byId('deckArea').getBoundingClientRect(); return {left:r.left,top:r.top,width:r.width,height:r.height}; }
+const communityElem=byId('community');
+let communityCards=[];
+
+function clearTable(){
+  players.forEach(p=>{ p.cards=[]; p.handElem.innerHTML=''; p.infoElem.textContent=''; });
+  communityElem.innerHTML=''; communityCards=[];
+  byId('status').textContent='Ready.';
+}
+
+function prepareCommunitySlots(){
+  communityElem.innerHTML='';
+  for(let i=0;i<5;i++){
+    const slot=document.createElement('div');
+    slot.style.width='var(--card-w)'; slot.style.height='var(--card-h)';
+    slot.style.borderRadius='6px';
+    slot.style.boxShadow='0 6px 12px rgba(0,0,0,.35)';
+    slot.style.background='linear-gradient(#1d7b1d,#146114)';
+    communityElem.appendChild(slot);
+    communityCards.push({slot,card:null});
+  }
+}
+
+// Get player slot based on current hand cards
+function getPlayerSlotRect(playerIndex){
+  const hand = byId(`hand-${playerIndex}`);
+  const rect = hand.getBoundingClientRect();
+  const cardIndex = hand.children.length;
+  return { left: rect.left + cardIndex*(CARD_W+8), top: rect.top, width: CARD_W, height: CARD_H };
+}
+
+function getCommunitySlotRect(slotIndex){
+  const slot = communityCards[slotIndex].slot;
+  const rect = slot.getBoundingClientRect();
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+function wait(ms){ return new Promise(res=>setTimeout(res, ms)); }
+
+// Start round
+async function startRound(){
+  clearTable(); createDeck(); shuffleDeck(); prepareCommunitySlots();
+  byId('status').textContent='Shuffled. Dealing...';
+  const deckRect = getDeckRect();
+
+  // Deal 2 cards per player
+  for(let i=0;i<2;i++){
+    for(let p=0;p<NUM_PLAYERS;p++){
+      const card = drawCard();
+      players[p].cards.push(card);
+      const targetRect = getPlayerSlotRect(p);
+      const faceUp = (p===USER_PLAYER);
+
+      await new Promise(resolve=>{
+        animateDeal(card, deckRect, targetRect, faceUp, flipElem=>{
+          const wrap=document.createElement('div');
+          wrap.style.width='var(--card-w)'; wrap.style.height='var(--card-h)';
+          wrap.style.display='inline-block'; wrap.style.position='relative';
+          wrap.appendChild(flipElem); players[p].handElem.appendChild(wrap);
+          resolve();
+        });
+      });
+      await wait(300); // gap between cards
+    }
+  }
+
+  byId('status').textContent='Dealt hole cards. Dealing flop...';
+  await wait(300); drawCard(); // burn
+  for(let i=0;i<3;i++){
+    const card = drawCard(); communityCards[i].card = card;
+    const targetRect = getCommunitySlotRect(i);
+    await new Promise(resolve=>{
+      animateDeal(card, deckRect, targetRect, false, flipElem=>{
+        communityCards[i].slot.innerHTML=''; communityCards[i].slot.appendChild(flipElem); resolve();
+      });
+    });
+    await wait(200);
+  }
+
+  byId('status').textContent='Flop done. Dealing turn...';
+  await wait(400); drawCard();
+  { const card = drawCard(); communityCards[3].card = card;
+    const targetRect = getCommunitySlotRect(3);
+    await new Promise(resolve=>{
+      animateDeal(card, deckRect, targetRect, false, flipElem=>{
+        communityCards[3].slot.innerHTML=''; communityCards[3].slot.appendChild(flipElem); resolve();
+      });
+    });
+  }
+
+  byId('status').textContent='Turn done. Dealing river...';
+  await wait(400); drawCard();
+  { const card = drawCard(); communityCards[4].card = card;
+    const targetRect = getCommunitySlotRect(4);
+    await new Promise(resolve=>{
+      animateDeal(card, deckRect, targetRect, false, flipElem=>{
+        communityCards[4].slot.innerHTML=''; communityCards[4].slot.appendChild(flipElem); resolve();
+      });
+    });
+  }
+
+  byId('status').textContent='All cards dealt.';
+}
+
+byId('startBtn').addEventListener('click', async()=>{
+  byId('startBtn').disabled=true; byId('resetBtn').disabled=true;
+  try{ await startRound(); }catch(err){ console.error(err); byId('status').textContent='Error: '+err.message; }
+  byId('startBtn').disabled=false; byId('resetBtn').disabled=false;
+});
+
+byId('resetBtn').addEventListener('click', ()=>{ clearTable(); prepareCommunitySlots(); });
+clearTable(); prepareCommunitySlots();
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Poker Table + Spots</title>
+<style>
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #111;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    draw();
+}
+
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+/* --------------------------
+        MAIN DRAW
+---------------------------*/
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const maxW = canvas.width * 0.95;
+    const maxH = canvas.height * 0.90;
+    const ratio = 0.55;
+
+    let tableW = maxW;
+    let tableH = tableW * ratio;
+
+    if (tableH > maxH) {
+        tableH = maxH;
+        tableW = tableH / ratio;
+    }
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    drawPokerTable(cx, cy, tableW, tableH);
+    drawPlayerSpots(cx, cy, tableW, tableH);
+}
+
+/* --------------------------
+      DRAW POKER TABLE
+---------------------------*/
+function drawPokerTable(cx, cy, w, h) {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, w/2, h/2, 0, 0, Math.PI * 2);
+
+    let g = ctx.createRadialGradient(cx, cy, h*0.1, cx, cy, h*0.6);
+    g.addColorStop(0, "#0f7b37");
+    g.addColorStop(1, "#064d22");
+
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    ctx.lineWidth = 18;
+    ctx.strokeStyle = "#d4af37";
+    ctx.stroke();
+}
+
+/* ----------------------------
+        DRAW 5 PLAYER SPOTS
+-----------------------------*/
+function drawPlayerSpots(cx, cy, w, h) {
+
+    const rx = w/2;
+    const ry = h/2;
+
+    const spotR = 32;   // circle radius
+
+    //PLAYER = bottom middle
+    let userX = cx;
+    let userY = cy + ry * 0.70;
+
+    drawSpot(userX, userY, "YOU");
+
+    // 4 AI PLAYERS → corners of oval
+    const positions = [
+        { label: "AI-1", angle: -140 }, // bottom-left curve
+        { label: "AI-2", angle: -40  }, // bottom-right curve
+        { label: "AI-3", angle: 140  }, // top-left
+        { label: "AI-4", angle: 40   }, // top-right
+    ];
+
+    positions.forEach(p => {
+        const rad = (p.angle * Math.PI) / 180;
+
+        let x = cx + Math.cos(rad) * rx * 0.85;
+        let y = cy + Math.sin(rad) * ry * 0.85;
+
+        drawSpot(x, y, p.label);
+    });
+}
+
+/* ----------------------------
+        SPOT CIRCLE HELPER
+-----------------------------*/
+function drawSpot(x, y, label) {
+    const radius = 32;
+
+    // background circle
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fill();
+
+    // label text
+    ctx.fillStyle = "white";
+    ctx.font = "16px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(label, x, y + 5);
+}
+
+</script>
+</body>
+</html>
+l
